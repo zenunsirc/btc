@@ -16,11 +16,10 @@ def send_telegram(text: str):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     requests.post(url, json=payload)
 
-# === Kalshi Connection ===
-config = Configuration(host="https://external-api.demo.kalshi.co/trade-api/v2")
+# === Production Kalshi (your real account) ===
+config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
 config.api_key_id = KALSHI_KEY_ID
 
-# Load private key (supports both env var and file)
 private_key = os.getenv("KALSHI_PRIVATE_KEY_PEM")
 if private_key:
     config.private_key_pem = private_key
@@ -30,16 +29,16 @@ else:
 
 kalshi = KalshiClient(config)
 
-print("✅ Bot started in cloud (Demo)")
+print("✅ Bot started (Production)")
 
 while True:
     try:
         balance = kalshi.get_balance()
         markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=6)
 
-        msg = "✅ *Kalshi BTC 15m Bot* (Demo)\n\n"
+        msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
         msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
-        msg += "*Open Markets:*\n"
+        msg += "*Open KXBTC15M Markets:*\n"
         for m in markets.markets:
             yes_bid = (m.yes_bid or 0) / 100
             yes_ask = (m.yes_ask or 0) / 100
@@ -52,4 +51,4 @@ while True:
         send_telegram(f"⚠️ Error: {str(e)}")
         print(f"Error: {e}")
 
-    time.sleep(300)   # Every 5 minutes
+    time.sleep(300)
