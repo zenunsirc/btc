@@ -7,7 +7,6 @@ from kalshi_python_sync import Configuration, KalshiClient
 load_dotenv()
 
 KALSHI_KEY_ID = os.getenv("KALSHI_KEY_ID")
-KALSHI_PRIVATE_KEY_PATH = os.getenv("KALSHI_PRIVATE_KEY_PATH")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -16,16 +15,13 @@ def send_telegram(text: str):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     requests.post(url, json=payload)
 
-# === Production Kalshi (your real account) ===
+# === Load and clean private key ===
+raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
+clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
+
 config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
 config.api_key_id = KALSHI_KEY_ID
-
-private_key = os.getenv("KALSHI_PRIVATE_KEY_PEM")
-if private_key:
-    config.private_key_pem = private_key
-else:
-    with open(KALSHI_PRIVATE_KEY_PATH, "r") as f:
-        config.private_key_pem = f.read()
+config.private_key_pem = clean_key
 
 kalshi = KalshiClient(config)
 
