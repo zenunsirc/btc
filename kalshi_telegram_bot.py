@@ -18,39 +18,41 @@ def send_telegram(text: str):
     except Exception as e:
         print(f"Telegram send failed: {e}")
 
-# Send startup message
-send_telegram("✅ Bot started successfully (Production)")
+try:
+    send_telegram("✅ Bot started successfully (Production)")
 
-# Load private key (cleaned)
-raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
-clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
+    raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
+    clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
 
-config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
-config.api_key_id = KALSHI_KEY_ID
-config.private_key_pem = clean_key
+    config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
+    config.api_key_id = KALSHI_KEY_ID
+    config.private_key_pem = clean_key
 
-kalshi = KalshiClient(config)
+    kalshi = KalshiClient(config)
 
-print("✅ Bot initialized successfully")
+    while True:
+        try:
+            balance = kalshi.get_balance()
+            markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=6)
 
-while True:
-    try:
-        balance = kalshi.get_balance()
-        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=6)
+            msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
+            msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
+            msg += "*Open KXBTC15M Markets:*\n"
+            for m in markets.markets:
+                yes_bid = (m.yes_bid or 0) / 100
+                yes_ask = (m.yes_ask or 0) / 100
+                msg += f"• `{m.ticker}` | Bid `${yes_bid:.2f}` Ask `${yes_ask:.2f}`\n"
 
-        msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
-        msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
-        msg += "*Open KXBTC15M Markets:*\n"
-        for m in markets.markets:
-            yes_bid = (m.yes_bid or 0) / 100
-            yes_ask = (m.yes_ask or 0) / 100
-            msg += f"• `{m.ticker}` | Bid `${yes_bid:.2f}` Ask `${yes_ask:.2f}`\n"
+            send_telegram(msg)
+            print("Message sent")
 
-        send_telegram(msg)
-        print("Message sent")
+        except Exception as e:
+            print(f"Loop error: {e}")
+            send_telegram(f"⚠️ Error: {str(e)}")
+            time.sleep(30)
 
-    except Exception as e:
-        print(f"Error: {type(e).__name__} - {str(e)}")
-        send_telegram(f"⚠️ Error: {str(e)}")
+except Exception as e:
+    print(f"Startup error: {e}")
+    send_telegram(f"❌ Startup Error: {str(e)}")
 
-    time.sleep(60)
+time.sleep(60)
