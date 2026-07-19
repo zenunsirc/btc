@@ -15,6 +15,9 @@ def send_telegram(text: str):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     requests.post(url, json=payload)
 
+# Send startup message immediately
+send_telegram("✅ Bot started successfully (Production)")
+
 raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
 clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
 
@@ -24,7 +27,7 @@ config.private_key_pem = clean_key
 
 kalshi = KalshiClient(config)
 
-print("✅ Bot started (Production)")
+print("✅ Kalshi client initialized")
 
 while True:
     try:
@@ -40,10 +43,11 @@ while True:
             msg += f"• `{m.ticker}` | Bid `${yes_bid:.2f}` Ask `${yes_ask:.2f}`\n"
 
         send_telegram(msg)
-        print("Message sent. Sleeping 60s...")
+        print("Message sent")
 
     except Exception as e:
-        send_telegram(f"⚠️ Error: {str(e)}")
-        print(f"Error: {e}")
+        error_msg = f"⚠️ Error: {str(e)}"
+        send_telegram(error_msg)
+        print(error_msg)
 
-    time.sleep(60)   # ← Changed to 60 seconds for testing
+    time.sleep(60)
