@@ -15,7 +15,6 @@ def send_telegram(text: str):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     requests.post(url, json=payload)
 
-# === Load and clean private key ===
 raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
 clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
 
@@ -41,10 +40,10 @@ while True:
             msg += f"• `{m.ticker}` | Bid `${yes_bid:.2f}` Ask `${yes_ask:.2f}`\n"
 
         send_telegram(msg)
-        print("Message sent. Sleeping...")
+        print("Message sent. Sleeping 60s...")
 
     except Exception as e:
         send_telegram(f"⚠️ Error: {str(e)}")
         print(f"Error: {e}")
 
-    time.sleep(300)
+    time.sleep(60)   # ← Changed to 60 seconds for testing
