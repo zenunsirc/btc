@@ -19,7 +19,7 @@ config.api_key_id = os.getenv("KALSHI_KEY_ID")
 config.private_key_pem = clean_key
 kalshi = KalshiClient(config)
 
-price_history = deque(maxlen=120)
+price_history = deque(maxlen=150)
 
 async def get_btc_price_async():
     try:
@@ -33,13 +33,18 @@ def get_timeframe_bias(current_price, minutes_ago):
     if not price_history:
         return "Neutral"
     cutoff = datetime.now() - timedelta(minutes=minutes_ago)
-    for ts, price in reversed(price_history):
-        if ts <= cutoff:
-            change = ((current_price - price) / price) * 100
-            if change > 0.25: return "Bullish"
-            if change < -0.25: return "Bearish"
-            return "Neutral"
-    return "Neutral"
+    past_prices = [p for ts, p in price_history if ts <= cutoff]
+    if not past_prices:
+        return "Neutral"
+    past_price = past_prices[-1]
+    change = ((current_price - past_price) / past_price) * 100
+
+    if change >= 0.4:
+        return "Bullish"
+    elif change <= -0.4:
+        return "Bearish"
+    else:
+        return "Neutral"
 
 async def send_update(context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -54,18 +59,18 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         bias_10m = get_timeframe_bias(btc_price, 10) if btc_price else "Neutral"
         bias_15m = get_timeframe_bias(btc_price, 15) if btc_price else "Neutral"
 
-        bullish = sum(b == "Bullish" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
-        bearish = sum(b == "Bearish" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+        bullish_count = sum(b == "Bullish" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+        bearish_count = sum(b == "Bearish" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
 
-        buy_score = min(10, 5 + bullish)
-        sell_score = min(10, 5 + bearish)
+        buy_score = min(10, 4 + bullish_count * 1.5)
+        sell_score = min(10, 4 + bearish_count * 1.5)
 
-        msg = "✅ *Kalshi BTC 15m Dashboard*\n\n"
+        msg = "✅ *Kalshi BTC 15m*\n\n"
         if btc_price:
             msg += f"₿ BTC: `${btc_price:,.2f}`\n"
-        msg += f"1m: *{bias_1m}*  |  5m: *{bias_5m}*\n"
-        msg += f"10m: *{bias_10m}* | 15m: *{bias_15m}*\n\n"
-        msg += f"Buy Score: `{buy_score}/10` | Sell Score: `{sell_score}/10`\n\n"
+        msg += f"1m: *{bias_1m}*   5m: *{bias_5m}*\n"
+        msg += f"10m: *{bias_10m}*  15m: *{bias_15m}*\n\n"
+        msg += f"Buy Score: `{int(buy_score)}/10` | Sell Score: `{int(sell_score)}/10`\n\n"
         msg += "*BTC 15min Markets:*\n"
 
         for m in markets.markets:
@@ -84,8 +89,8 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.job_queue.run_repeating(send_update, interval=20, first=5)   # ← Changed to 20 seconds
-    print("Bot started successfully (updates every 20s)!")
+    app.job_queue.run_repeating(send_update, interval=20, first=5)
+    print("Bot started (20s updates)!")
     app.run_polling()
 
 if __name__ == "__main__":
