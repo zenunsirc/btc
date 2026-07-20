@@ -16,7 +16,7 @@ def send_telegram(text: str):
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
         requests.post(url, json=payload)
     except Exception as e:
-        print(f"Telegram send error: {e}")
+        print(f"Telegram error: {e}")
 
 send_telegram("✅ Bot started successfully (Production)")
 
@@ -32,7 +32,7 @@ kalshi = KalshiClient(config)
 while True:
     try:
         balance = kalshi.get_balance()
-        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
+        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=6)
 
         msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
         msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
@@ -40,14 +40,13 @@ while True:
         for m in markets.markets:
             yes_bid = (m.yes_bid or 0) / 100
             yes_ask = (m.yes_ask or 0) / 100
-            msg += f"• `{m.ticker}`\n  Bid: `${yes_bid:.2f}` | Ask: `${yes_ask:.2f}`\n"
+            msg += f"• `{m.ticker}` | Bid `${yes_bid:.2f}` Ask `${yes_ask:.2f}`\n"
 
         send_telegram(msg)
-        print("Data message sent successfully")
+        print("Message sent")
 
     except Exception as e:
-        error_msg = f"⚠️ Error: {type(e).__name__} - {str(e)}"
-        print(error_msg)
-        send_telegram(error_msg)
+        print(f"Error in loop: {e}")
+        send_telegram(f"⚠️ Error: {str(e)}")
 
-    time.sleep(60)
+    time.sleep(15)   # Short sleep for testing
