@@ -9,7 +9,6 @@ KALSHI_KEY_ID = os.getenv("KALSHI_KEY_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Kalshi setup
 raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
 clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
 
@@ -42,24 +41,51 @@ async def send_monitoring(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Monitoring error: {e}")
 
-async def start(update, context):
-    await update.message.reply_text("✅ Bot is running with monitoring + commands.")
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        ticker = context.args[0]
+        count = int(context.args[1])
+        market = kalshi.get_market(ticker=ticker)
+        price = float(market.yes_ask_dollars or market.yes_bid_dollars)
 
-async def balance_cmd(update, context):
+        order = kalshi.create_order(
+            ticker=ticker, action="buy", side="yes", count=count,
+            yes_price=int(price * 100), type="limit", time_in_force="good_till_canceled"
+        )
+        await update.message.reply_text(f"✅ Buy order placed! ID: {order.order_id}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        ticker = context.args[0]
+        count = int(context.args[1])
+        market = kalshi.get_market(ticker=ticker)
+        price = float(market.yes_bid_dollars or market.yes_ask_dollars)
+
+        order = kalshi.create_order(
+            ticker=ticker, action="sell", side="yes", count=count,
+            yes_price=int(price * 100), type="limit", time_in_force="good_till_canceled"
+        )
+        await update.message.reply_text(f"✅ Sell order placed! ID: {order.order_id}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = kalshi.get_balance()
     await update.message.reply_text(f"💰 Balance: ${bal.balance / 100:.2f}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Add commands
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("buy", buy))
+    app.add_handler(CommandHandler("sell", sell))
     app.add_handler(CommandHandler("balance", balance_cmd))
 
-    # Schedule monitoring every 60 seconds
+    # Send monitoring update every 60 seconds
     app.job_queue.run_repeating(send_monitoring, interval=60, first=10)
 
-    print("Bot started successfully!")
+    print("Bot is running!")
     app.run_polling()
 
 if __name__ == "__main__":
