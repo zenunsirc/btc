@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 from kalshi_python_sync import Configuration, KalshiClient
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 load_dotenv()
 
@@ -16,6 +17,14 @@ config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
 config.api_key_id = KALSHI_KEY_ID
 config.private_key_pem = clean_key
 kalshi = KalshiClient(config)
+
+def get_main_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("💰 Balance", callback_data="balance")],
+        [InlineKeyboardButton("🔼 Buy", callback_data="buy_menu"),
+         InlineKeyboardButton("🔽 Sell", callback_data="sell_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 async def send_monitoring(context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -36,56 +45,37 @@ async def send_monitoring(context: ContextTypes.DEFAULT_TYPE):
 
             msg += f"• Up · {up_pct}% | Down · {down_pct}%{lock}\n"
 
-        await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
+        await context.bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=msg,
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
+        )
 
     except Exception as e:
         print(f"Monitoring error: {e}")
 
-async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        ticker = context.args[0]
-        count = int(context.args[1])
-        market = kalshi.get_market(ticker=ticker)
-        price = float(market.yes_ask_dollars or market.yes_bid_dollars)
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-        order = kalshi.create_order(
-            ticker=ticker, action="buy", side="yes", count=count,
-            yes_price=int(price * 100), type="limit", time_in_force="good_till_canceled"
-        )
-        await update.message.reply_text(f"✅ Buy order placed! ID: {order.order_id}")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+    if query.data == "balance":
+        bal = kalshi.get_balance()
+        await query.edit_message_text(f"💰 Balance: ${bal.balance / 100:.2f}")
 
-async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        ticker = context.args[0]
-        count = int(context.args[1])
-        market = kalshi.get_market(ticker=ticker)
-        price = float(market.yes_bid_dollars or market.yes_ask_dollars)
+    elif query.data == "buy_menu":
+        await query.edit_message_text("Send: /buy TICKER AMOUNT\nExample: /buy KXBTC15M-26JUL200245-45 10")
 
-        order = kalshi.create_order(
-            ticker=ticker, action="sell", side="yes", count=count,
-            yes_price=int(price * 100), type="limit", time_in_force="good_till_canceled"
-        )
-        await update.message.reply_text(f"✅ Sell order placed! ID: {order.order_id}")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-
-async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bal = kalshi.get_balance()
-    await update.message.reply_text(f"💰 Balance: ${bal.balance / 100:.2f}")
+    elif query.data == "sell_menu":
+        await query.edit_message_text("Send: /sell TICKER AMOUNT\nExample: /sell KXBTC15M-26JUL200245-45 5")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("buy", buy))
-    app.add_handler(CommandHandler("sell", sell))
-    app.add_handler(CommandHandler("balance", balance_cmd))
-
-    # Send monitoring update every 60 seconds
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.job_queue.run_repeating(send_monitoring, interval=60, first=10)
 
-    print("Bot is running!")
+    print("Bot running with buttons!")
     app.run_polling()
 
 if __name__ == "__main__":
