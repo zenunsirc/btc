@@ -1,9 +1,12 @@
 import os
+import time
 import requests
 from dotenv import load_dotenv
+from kalshi_python_sync import Configuration, KalshiClient
 
 load_dotenv()
 
+KALSHI_KEY_ID = os.getenv("KALSHI_KEY_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -12,5 +15,36 @@ def send_telegram(text: str):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     requests.post(url, json=payload)
 
-send_telegram("✅ Test message from Render - Bot is alive!")
-print("Test message sent")
+# Startup message
+send_telegram("✅ Bot started successfully (Production)")
+
+# Load private key
+raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
+clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
+config.api_key_id = KALSHI_KEY_ID
+config.private_key_pem = clean_key
+
+kalshi = KalshiClient(config)
+
+# Main loop
+while True:
+    try:
+        balance = kalshi.get_balance()
+        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=6)
+
+        msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
+        msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
+        msg += "*Open KXBTC15M Markets:*\n"
+        for m in markets.markets:
+            yes_bid = (m.yes_bid or 0) / 100
+            yes_ask = (m.yes_ask or 0) / 100
+            msg += f"• `{m.ticker}` | Bid `${yes_bid:.2f}` Ask `${yes_ask:.2f}`\n"
+
+        send_telegram(msg)
+
+    except Exception as e:
+        send_telegram(f"⚠️ Error: {str(e)}")
+
+    time.sleep(60)
