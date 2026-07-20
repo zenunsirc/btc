@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from kalshi_python_sync import Configuration, KalshiClient
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 load_dotenv()
 
@@ -18,11 +18,13 @@ config.api_key_id = KALSHI_KEY_ID
 config.private_key_pem = clean_key
 kalshi = KalshiClient(config)
 
-def get_main_keyboard():
+def get_keyboard():
     keyboard = [
-        [InlineKeyboardButton("💰 Balance", callback_data="balance")],
-        [InlineKeyboardButton("🔼 Buy", callback_data="buy_menu"),
-         InlineKeyboardButton("🔽 Sell", callback_data="sell_menu")]
+        [
+            InlineKeyboardButton("💰 Balance", callback_data="balance"),
+            InlineKeyboardButton("🔼 Buy", callback_data="buy"),
+            InlineKeyboardButton("🔽 Sell", callback_data="sell")
+        ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -49,7 +51,7 @@ async def send_monitoring(context: ContextTypes.DEFAULT_TYPE):
             chat_id=TELEGRAM_CHAT_ID,
             text=msg,
             parse_mode="Markdown",
-            reply_markup=get_main_keyboard()
+            reply_markup=get_keyboard()
         )
 
     except Exception as e:
@@ -61,13 +63,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "balance":
         bal = kalshi.get_balance()
-        await query.edit_message_text(f"💰 Balance: ${bal.balance / 100:.2f}")
+        await query.edit_message_text(
+            text=f"💰 Balance: ${bal.balance / 100:.2f}\n\nTap a button below to go back.",
+            reply_markup=get_keyboard()
+        )
 
-    elif query.data == "buy_menu":
-        await query.edit_message_text("Send: /buy TICKER AMOUNT\nExample: /buy KXBTC15M-26JUL200245-45 10")
+    elif query.data == "buy":
+        await query.edit_message_text(
+            "Send this command:\n`/buy TICKER AMOUNT`\n\nExample:\n`/buy KXBTC15M-26JUL200245-45 10`",
+            parse_mode="Markdown",
+            reply_markup=get_keyboard()
+        )
 
-    elif query.data == "sell_menu":
-        await query.edit_message_text("Send: /sell TICKER AMOUNT\nExample: /sell KXBTC15M-26JUL200245-45 5")
+    elif query.data == "sell":
+        await query.edit_message_text(
+            "Send this command:\n`/sell TICKER AMOUNT`\n\nExample:\n`/sell KXBTC15M-26JUL200245-45 5`",
+            parse_mode="Markdown",
+            reply_markup=get_keyboard()
+        )
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -75,7 +88,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.job_queue.run_repeating(send_monitoring, interval=60, first=10)
 
-    print("Bot running with buttons!")
+    print("Bot running cleanly with buttons!")
     app.run_polling()
 
 if __name__ == "__main__":
