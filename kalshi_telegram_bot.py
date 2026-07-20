@@ -1,4 +1,6 @@
 import os
+from collections import deque
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from kalshi_python_sync import Configuration, KalshiClient
 from telegram.ext import Application, ContextTypes
@@ -6,44 +8,90 @@ import httpx
 
 load_dotenv()
 
-print("=== Bot starting ===")
-
 KALSHI_KEY_ID = os.getenv("KALSHI_KEY_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-print(f"KALSHI_KEY_ID loaded: {bool(KALSHI_KEY_ID)}")
-print(f"TELEGRAM_TOKEN loaded: {bool(TELEGRAM_TOKEN)}")
-print(f"TELEGRAM_CHAT_ID loaded: {bool(TELEGRAM_CHAT_ID)}")
-
 raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
 clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
-
-print(f"Private key length: {len(clean_key)} characters")
 
 config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
 config.api_key_id = KALSHI_KEY_ID
 config.private_key_pem = clean_key
+kalshi = KalshiClient(config)
 
-try:
-    kalshi = KalshiClient(config)
-    print("✅ Kalshi client connected successfully")
-except Exception as e:
-    print(f"❌ Failed to connect to Kalshi: {e}")
+price_history = deque(maxlen=120)
+last_btc_price = None
+
+async def get_btc_price_async():
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
+            return float(r.json()["price"])
+    except:
+        return None
+
+def get_timeframe_bias(current_price, minutes_ago):
+    if not price_history:
+        return "Neutral"
+    cutoff = datetime.now() - timedelta(minutes=minutes_ago)
+    for ts, price in reversed(price_history):
+        if ts <= cutoff:
+            change = ((current_price - price) / price) * 100
+            if change > 0.25: return "Bullish"
+            if change < -0.25: return "Bearish"
+            return "Neutral"
+    return "Neutral"
 
 async def send_update(context: ContextTypes.DEFAULT_TYPE):
+    global last_btc_price
     try:
         balance = kalshi.get_balance()
-        print(f"Balance fetched: ${balance.balance / 100:.2f}")
-        # ... rest of your monitoring code ...
+        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
+        btc_price = await get_btc_price_async()
+
+        if btc_price:
+            price_history.append((datetime.now(), btc_price))
+
+        bias_1m  = get_timeframe_bias(btc_price, 1) if btc_price else "Neutral"
+        bias_5m  = get_timeframe_bias(btc_price, 5) if btc_price else "Neutral"
+        bias_10m = get_timeframe_bias(btc_price, 10) if btc_price else "Neutral"
+        bias_15m = get_timeframe_bias(btc_price, 15) if btc_price else "Neutral"
+
+        bullish = sum(b == "Bullish" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+        bearish = sum(b == "Bearish" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+
+        buy_score = min(10, 5 + bullish)
+        sell_score = min(10, 5 + bearish)
+
+        msg = "✅ *Kalshi BTC 15m Dashboard*\n\n"
+        if btc_price:
+            msg += f"₿ BTC: `${btc_price:,.2f}`\n"
+        msg += f"1m: *{bias_1m}*  |  5m: *{bias_5m}*\n"
+        msg += f"10m: *{bias_10m}* | 15m: *{bias_15m}*\n\n"
+        msg += f"Buy Score: `{buy_score}/10` | Sell Score: `{sell_score}/10`\n\n"
+        msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
+        msg += "*BTC 15min Markets:*\n"
+
+        for m in markets.markets:
+            yes_bid = float(m.yes_bid_dollars or 0)
+            yes_ask = float(m.yes_ask_dollars or 0)
+            mid = (yes_bid + yes_ask) / 2 if (yes_bid + yes_ask) > 0 else 0
+            up = round(mid * 100)
+            down = 100 - up
+            lock = " 🔒💵" if up >= 75 or down >= 75 else ""
+            msg += f"• Up · {up}% | Down · {down}%{lock}\n"
+
+        await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
+        last_btc_price = btc_price
+
     except Exception as e:
         print(f"Update error: {e}")
 
 def main():
-    print("Starting Telegram bot...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.job_queue.run_repeating(send_update, interval=60, first=10)
-    print("Bot is running!")
+    print("Bot started successfully!")
     app.run_polling()
 
 if __name__ == "__main__":
