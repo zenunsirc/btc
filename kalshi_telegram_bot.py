@@ -84,8 +84,8 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.job_queue.run_repeating(send_update, interval=60, first=10)
-    print("Bot started successfully!")
+    app.job_queue.run_repeating(send_update, interval=20, first=5)   # ← Changed to 20 seconds
+    print("Bot started successfully (updates every 20s)!")
     app.run_polling()
 
 if __name__ == "__main__":
