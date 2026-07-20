@@ -28,7 +28,6 @@ config.private_key_pem = clean_key
 
 kalshi = KalshiClient(config)
 
-# Main loop
 while True:
     try:
         balance = kalshi.get_balance()
