@@ -1,8 +1,10 @@
 import os
+from collections import deque
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from kalshi_python_sync import Configuration, KalshiClient
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, ContextTypes
+import httpx
 
 load_dotenv()
 
@@ -18,35 +20,87 @@ config.api_key_id = KALSHI_KEY_ID
 config.private_key_pem = clean_key
 kalshi = KalshiClient(config)
 
-current_ticker = None
-last_btc_price = None
+# Store price history: (timestamp, price)
+price_history = deque(maxlen=100)  # Keep last ~100 data points
 
-def get_keyboard():
-    keyboard = [
-        [
-            InlineKeyboardButton("🔼 Buy $10", callback_data="buy_10"),
-            InlineKeyboardButton("🔽 Sell All", callback_data="sell_all")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def get_btc_price():
+async def get_btc_price_async():
     try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=5)
-        return float(r.json()["price"])
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
+            return float(r.json()["price"])
     except:
         return None
 
-async def send_monitoring(context: ContextTypes.DEFAULT_TYPE):
-    global current_ticker
+def get_bias(current_price, minutes_ago):
+    """Calculate bias for a specific timeframe"""
+    if not price_history:
+        return "Neutral"
+    
+    cutoff_time = datetime.now() - timedelta(minutes=minutes_ago)
+    
+    # Find the closest price from X minutes ago
+    past_price = None
+    for ts, price in reversed(price_history):
+        if ts <= cutoff_time:
+            past_price = price
+            break
+    
+    if past_price is None:
+        return "Neutral"
+    
+    change = ((current_price - past_price) / past_price) * 100
+    
+    if change > 0.25:
+        return "Bullish"
+    elif change < -0.25:
+        return "Bearish"
+    else:
+        return "Neutral"
+
+async def send_update(context: ContextTypes.DEFAULT_TYPE):
+    global price_history
+    
     try:
         balance = kalshi.get_balance()
         markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
+        btc_price = await get_btc_price_async()
 
-        if markets.markets:
-            current_ticker = markets.markets[0].ticker
+        if btc_price is None:
+            return
 
-        msg = "✅ *Kalshi BTC 15m Bot*\n\n"
+        # Save price to history
+        price_history.append((datetime.now(), btc_price))
+
+        # === Multi-timeframe Bias ===
+        bias_1m  = get_bias(btc_price, 1)
+        bias_5m  = get_bias(btc_price, 5)
+        bias_10m = get_bias(btc_price, 10)
+        bias_15m = get_bias(btc_price, 15)
+
+        # === Calculate Buy/Sell Score (1-10) ===
+        bullish_count = sum(1 for b in [bias_1m, bias_5m, bias_10m, bias_15m] if b == "Bullish")
+        bearish_count = sum(1 for b in [bias_1m, bias_5m, bias_10m, bias_15m] if b == "Bearish")
+
+        buy_score = min(10, 4 + bullish_count * 1.5)
+        sell_score = min(10, 4 + bearish_count * 1.5)
+
+        # Kalshi bias
+        first = markets.markets[0] if markets.markets else None
+        kalshi_bias = "Neutral"
+        if first:
+            mid = (float(first.yes_bid_dollars or 0) + float(first.yes_ask_dollars or 0)) / 2
+            kalshi_bias = "Bullish" if mid > 0.55 else "Bearish" if mid < 0.45 else "Neutral"
+
+        # Final combined bias
+        final_bias = "Bullish" if buy_score > sell_score else "Bearish" if sell_score > buy_score else "Neutral"
+
+        # Build message
+        msg = "✅ *Kalshi BTC 15m Scalp Dashboard*\n\n"
+        msg += f"₿ BTC: `${btc_price:,.2f}`\n"
+        msg += f"1m Bias: *{bias_1m}*   |   5m Bias: *{bias_5m}*\n"
+        msg += f"10m Bias: *{bias_10m}* |   15m Bias: *{bias_15m}*\n\n"
+        msg += f"🎯 Buy Score: `{int(buy_score)}/10`   Sell Score: `{int(sell_score)}/10`\n"
+        msg += f"📊 Overall Bias: *{final_bias}*\n\n"
         msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
         msg += "*BTC 15min Markets:*\n"
 
@@ -56,7 +110,7 @@ async def send_monitoring(context: ContextTypes.DEFAULT_TYPE):
             mid = (yes_bid + yes_ask) / 2 if (yes_bid + yes_ask) > 0 else 0
             up_pct = round(mid * 100)
             down_pct = 100 - up_pct
-            lock = " 🔒💵" if up_pct >= 70 or down_pct >= 70 else ""
+            lock = " 🔒💵" if up_pct >= 75 or down_pct >= 75 else ""
 
             msg += f"• Up · {up_pct}% | Down · {down_pct}%{lock}\n"
 
@@ -67,75 +121,15 @@ async def send_monitoring(context: ContextTypes.DEFAULT_TYPE):
         )
 
     except Exception as e:
-        print(f"Monitoring error: {e}")
-
-async def price_alerts(context: ContextTypes.DEFAULT_TYPE):
-    global last_btc_price
-    try:
-        price = get_btc_price()
-        if price is None:
-            return
-
-        if last_btc_price is None:
-            last_btc_price = price
-            return
-
-        change = ((price - last_btc_price) / last_btc_price) * 100
-
-        if abs(change) >= 0.5:
-            direction = "🚀 Up" if change > 0 else "📉 Down"
-            msg = f"⚡ *BTC Alert* {direction} **{abs(change):.2f}%**\n"
-            msg += f"Price: `${price:,.2f}`"
-            await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
-
-        last_btc_price = price
-
-    except Exception as e:
-        print(f"Price alert error: {e}")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global current_ticker
-    query = update.callback_query
-    await query.answer()
-
-    if not current_ticker:
-        await query.edit_message_text("No active market right now.")
-        return
-
-    try:
-        response = kalshi.get_market(ticker=current_ticker)
-        market = response.market
-        price = float(market.yes_ask_dollars or market.yes_bid_dollars or 0)
-
-        if query.data == "buy_10":
-            order = kalshi.create_order(
-                ticker=current_ticker, action="buy", side="yes", count=10,
-                yes_price=int(price * 100), type="limit", time_in_force="good_till_canceled"
-            )
-            await query.edit_message_text(f"✅ Bought $10 worth!\nOrder ID: {order.order_id}")
-
-        elif query.data == "sell_all":
-            order = kalshi.create_order(
-                ticker=current_ticker, action="sell", side="yes", count=10,
-                yes_price=1, type="limit", time_in_force="good_till_canceled"
-            )
-            await query.edit_message_text(f"✅ Sell order placed!\nOrder ID: {order.order_id}")
-
-    except Exception as e:
-        await query.edit_message_text(f"❌ Error: {str(e)}")
+        print(f"Update error: {e}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CallbackQueryHandler(button_handler))
+    # Update every 60 seconds
+    app.job_queue.run_repeating(send_update, interval=60, first=10)
 
-    # Monitoring every 60 seconds
-    app.job_queue.run_repeating(send_monitoring, interval=60, first=10)
-
-    # Real-time price alerts every 15 seconds
-    app.job_queue.run_repeating(price_alerts, interval=15, first=5)
-
-    print("Bot is running cleanly!")
+    print("Bot running with multi-timeframe bias + scores!")
     app.run_polling()
 
 if __name__ == "__main__":
