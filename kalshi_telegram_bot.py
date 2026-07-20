@@ -11,12 +11,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram(text: str):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(f"Telegram error: {e}")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    requests.post(url, json=payload)
 
 send_telegram("✅ Bot started successfully (Production)")
 
@@ -32,15 +29,23 @@ kalshi = KalshiClient(config)
 while True:
     try:
         balance = kalshi.get_balance()
-        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
+        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=10)
 
         msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
         msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
         msg += "*Open KXBTC15M Markets:*\n"
+
         for m in markets.markets:
             yes_bid = float(m.yes_bid_dollars or 0)
             yes_ask = float(m.yes_ask_dollars or 0)
-            msg += f"• `{m.ticker}`\n  Bid: `${yes_bid:.2f}` | Ask: `${yes_ask:.2f}`\n"
+
+            # Calculate Up/Down percentages from mid price
+            mid = (yes_bid + yes_ask) / 2 if (yes_bid + yes_ask) > 0 else 0
+            up_pct = round(mid * 100)
+            down_pct = 100 - up_pct
+
+            msg += f"• `{m.ticker}`\n"
+            msg += f"  Up · {up_pct}% | Down · {down_pct}%\n\n"
 
         send_telegram(msg)
 
