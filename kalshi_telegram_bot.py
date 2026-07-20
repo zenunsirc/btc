@@ -39,13 +39,11 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         if btc_price:
             price_history.append((datetime.now(), btc_price))
 
-        # Get target from first market
-        first = markets.markets[0] if markets.markets else None
-        target = first.title if first and hasattr(first, 'title') else "N/A"
-
         # === Improved Buy/Sell Score ===
         buy_score = 5
         sell_score = 5
+
+        first = markets.markets[0] if markets.markets else None
 
         if first:
             mid = (float(first.yes_bid_dollars or 0) + float(first.yes_ask_dollars or 0)) / 2
@@ -58,7 +56,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             elif mid < 0.44:
                 sell_score = 7
 
-        # Add recent BTC momentum
+        # Add BTC momentum
         if btc_price and last_btc_price:
             change = ((btc_price - last_btc_price) / last_btc_price) * 100
             if change > 0.25:
@@ -68,8 +66,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 
         msg = "✅ *Kalshi BTC 15m*\n\n"
         if btc_price:
-            msg += f"₿ BTC Actual: `${btc_price:,.2f}`\n"
-        msg += f"🎯 Objetivo: {target}\n\n"
+            msg += f"₿ BTC: `${btc_price:,.2f}`\n\n"
         msg += f"Compra: `{buy_score}/10` | Venta: `{sell_score}/10`\n\n"
         msg += "*Mercados BTC 15min:*\n"
 
