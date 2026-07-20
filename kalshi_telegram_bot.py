@@ -1,5 +1,4 @@
 import os
-import time
 from dotenv import load_dotenv
 from kalshi_python_sync import Configuration, KalshiClient
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -20,7 +19,7 @@ config.private_key_pem = clean_key
 kalshi = KalshiClient(config)
 
 current_ticker = None
-last_price = None
+last_btc_price = None
 
 def get_keyboard():
     keyboard = [
@@ -64,40 +63,32 @@ async def send_monitoring(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
             text=msg,
-            parse_mode="Markdown",
-            reply_markup=get_keyboard()
+            parse_mode="Markdown"
         )
 
     except Exception as e:
         print(f"Monitoring error: {e}")
 
 async def price_alerts(context: ContextTypes.DEFAULT_TYPE):
-    global last_price
+    global last_btc_price
     try:
         price = get_btc_price()
         if price is None:
             return
 
-        if last_price is None:
-            last_price = price
+        if last_btc_price is None:
+            last_btc_price = price
             return
 
-        change_pct = ((price - last_price) / last_price) * 100
+        change = ((price - last_btc_price) / last_btc_price) * 100
 
-        if abs(change_pct) >= 0.5:  # Alert on 0.5%+ move
-            direction = "🚀 Up" if change_pct > 0 else "📉 Down"
-            msg = f"⚡ *BTC Price Alert*\n\n"
-            msg += f"{direction} **{abs(change_pct):.2f}%** in short time\n"
-            msg += f"Current Price: `${price:,.2f}`\n\n"
-            msg += f"Check your Kalshi 15min positions!"
+        if abs(change) >= 0.5:
+            direction = "🚀 Up" if change > 0 else "📉 Down"
+            msg = f"⚡ *BTC Alert* {direction} **{abs(change):.2f}%**\n"
+            msg += f"Price: `${price:,.2f}`"
+            await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
 
-            await context.bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
-                text=msg,
-                parse_mode="Markdown"
-            )
-
-        last_price = price
+        last_btc_price = price
 
     except Exception as e:
         print(f"Price alert error: {e}")
@@ -107,40 +98,44 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "buy_10" and current_ticker:
-        try:
-            market = kalshi.get_market(ticker=current_ticker)
-            price = float(market.yes_ask_dollars or market.yes_bid_dollars)
+    if not current_ticker:
+        await query.edit_message_text("No active market right now.")
+        return
+
+    try:
+        response = kalshi.get_market(ticker=current_ticker)
+        market = response.market
+        price = float(market.yes_ask_dollars or market.yes_bid_dollars or 0)
+
+        if query.data == "buy_10":
             order = kalshi.create_order(
                 ticker=current_ticker, action="buy", side="yes", count=10,
                 yes_price=int(price * 100), type="limit", time_in_force="good_till_canceled"
             )
             await query.edit_message_text(f"✅ Bought $10 worth!\nOrder ID: {order.order_id}")
-        except Exception as e:
-            await query.edit_message_text(f"❌ Error: {str(e)}")
 
-    elif query.data == "sell_all" and current_ticker:
-        try:
+        elif query.data == "sell_all":
             order = kalshi.create_order(
                 ticker=current_ticker, action="sell", side="yes", count=10,
                 yes_price=1, type="limit", time_in_force="good_till_canceled"
             )
             await query.edit_message_text(f"✅ Sell order placed!\nOrder ID: {order.order_id}")
-        except Exception as e:
-            await query.edit_message_text(f"❌ Error: {str(e)}")
+
+    except Exception as e:
+        await query.edit_message_text(f"❌ Error: {str(e)}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Monitoring every 60s
+    # Monitoring every 60 seconds
     app.job_queue.run_repeating(send_monitoring, interval=60, first=10)
 
-    # Price alerts every 15 seconds
+    # Real-time price alerts every 15 seconds
     app.job_queue.run_repeating(price_alerts, interval=15, first=5)
 
-    print("Bot running with real-time price alerts + buttons!")
+    print("Bot is running cleanly!")
     app.run_polling()
 
 if __name__ == "__main__":
