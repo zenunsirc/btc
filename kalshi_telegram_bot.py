@@ -11,9 +11,12 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram(text: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"Failed to send Telegram message: {e}")
 
 # Startup message
 send_telegram("✅ Bot started successfully (Production)")
@@ -44,6 +47,8 @@ while True:
         send_telegram(msg)
 
     except Exception as e:
-        send_telegram(f"⚠️ Error: {str(e)}")
+        error_text = f"⚠️ Error: {type(e).__name__} - {str(e)}"
+        print(error_text)
+        send_telegram(error_text)
 
     time.sleep(60)
