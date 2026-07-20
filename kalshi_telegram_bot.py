@@ -39,11 +39,10 @@ def get_timeframe_bias(current_price, minutes_ago):
     past_price = past_prices[-1]
     change = ((current_price - past_price) / past_price) * 100
 
-    # Lowered threshold for better sensitivity
     if change >= 0.25:
-        return "Alcista", "📈"
+        return "Arriba", "📈"
     elif change <= -0.25:
-        return "Bajista", "📉"
+        return "Bajo", "📉"
     else:
         return "Neutral", "➖"
 
@@ -60,8 +59,8 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         bias_10m, emoji_10m = get_timeframe_bias(btc_price, 10) if btc_price else ("Neutral", "➖")
         bias_15m, emoji_15m = get_timeframe_bias(btc_price, 15) if btc_price else ("Neutral", "➖")
 
-        bullish_count = sum(b == "Alcista" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
-        bearish_count = sum(b == "Bajista" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+        bullish_count = sum(b == "Arriba" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+        bearish_count = sum(b == "Bajo" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
 
         buy_score = min(10, 4 + bullish_count * 1.5)
         sell_score = min(10, 4 + bearish_count * 1.5)
@@ -90,7 +89,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             up = round(mid * 100)
             down = 100 - up
             lock = " 🔒💵" if up >= 75 or down >= 75 else ""
-            msg += f"• Alcista · {up}% | Bajista · {down}%{lock}\n"
+            msg += f"• Arriba · {up}% | Bajo · {down}%{lock}\n"
 
         await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
 
@@ -100,7 +99,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.job_queue.run_repeating(send_update, interval=20, first=5)
-    print("Bot iniciado con indicadores mejorados")
+    print("Bot iniciado correctamente")
     app.run_polling()
 
 if __name__ == "__main__":
