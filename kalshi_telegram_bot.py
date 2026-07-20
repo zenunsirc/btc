@@ -33,19 +33,16 @@ while True:
 
         msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
         msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
-        msg += "*Open KXBTC15M Markets:*\n"
+        msg += "*BTC 15min Markets:*\n"
 
-        for m in markets.markets:
+        for i, m in enumerate(markets.markets, 1):
             yes_bid = float(m.yes_bid_dollars or 0)
             yes_ask = float(m.yes_ask_dollars or 0)
-
-            # Calculate Up/Down percentages from mid price
             mid = (yes_bid + yes_ask) / 2 if (yes_bid + yes_ask) > 0 else 0
             up_pct = round(mid * 100)
             down_pct = 100 - up_pct
 
-            msg += f"• `{m.ticker}`\n"
-            msg += f"  Up · {up_pct}% | Down · {down_pct}%\n\n"
+            msg += f"{i}. Up · {up_pct}% | Down · {down_pct}%\n"
 
         send_telegram(msg)
 
