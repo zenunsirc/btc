@@ -8,7 +8,6 @@ import httpx
 
 load_dotenv()
 
-KALSHI_KEY_ID = os.getenv("KALSHI_KEY_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -16,12 +15,11 @@ raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
 clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
 
 config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
-config.api_key_id = KALSHI_KEY_ID
+config.api_key_id = os.getenv("KALSHI_KEY_ID")
 config.private_key_pem = clean_key
 kalshi = KalshiClient(config)
 
 price_history = deque(maxlen=120)
-last_btc_price = None
 
 async def get_btc_price_async():
     try:
@@ -44,9 +42,7 @@ def get_timeframe_bias(current_price, minutes_ago):
     return "Neutral"
 
 async def send_update(context: ContextTypes.DEFAULT_TYPE):
-    global last_btc_price
     try:
-        balance = kalshi.get_balance()
         markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
         btc_price = await get_btc_price_async()
 
@@ -70,7 +66,6 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         msg += f"1m: *{bias_1m}*  |  5m: *{bias_5m}*\n"
         msg += f"10m: *{bias_10m}* | 15m: *{bias_15m}*\n\n"
         msg += f"Buy Score: `{buy_score}/10` | Sell Score: `{sell_score}/10`\n\n"
-        msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
         msg += "*BTC 15min Markets:*\n"
 
         for m in markets.markets:
@@ -83,7 +78,6 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             msg += f"• Up · {up}% | Down · {down}%{lock}\n"
 
         await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
-        last_btc_price = btc_price
 
     except Exception as e:
         print(f"Update error: {e}")
