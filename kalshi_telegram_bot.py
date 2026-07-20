@@ -1,5 +1,4 @@
 import os
-import time
 import requests
 from dotenv import load_dotenv
 from kalshi_python_sync import Configuration, KalshiClient
@@ -11,12 +10,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram(text: str):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(f"Telegram error: {e}")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    requests.post(url, json=payload)
 
 send_telegram("✅ Bot started successfully (Production)")
 
@@ -29,24 +25,15 @@ config.private_key_pem = clean_key
 
 kalshi = KalshiClient(config)
 
-while True:
-    try:
-        balance = kalshi.get_balance()
-        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=6)
+balance = kalshi.get_balance()
+markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
 
-        msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
-        msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
-        msg += "*Open KXBTC15M Markets:*\n"
-        for m in markets.markets:
-            yes_bid = (m.yes_bid or 0) / 100
-            yes_ask = (m.yes_ask or 0) / 100
-            msg += f"• `{m.ticker}` | Bid `${yes_bid:.2f}` Ask `${yes_ask:.2f}`\n"
+msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
+msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
+msg += "*Open KXBTC15M Markets:*\n"
+for m in markets.markets:
+    yes_bid = (m.yes_bid or 0) / 100
+    yes_ask = (m.yes_ask or 0) / 100
+    msg += f"• `{m.ticker}`\n  Bid: `${yes_bid:.2f}` | Ask: `${yes_ask:.2f}`\n"
 
-        send_telegram(msg)
-        print("Message sent")
-
-    except Exception as e:
-        print(f"Error in loop: {e}")
-        send_telegram(f"⚠️ Error: {str(e)}")
-
-    time.sleep(15)   # Short sleep for testing
+send_telegram(msg)
