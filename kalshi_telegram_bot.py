@@ -19,7 +19,8 @@ config.api_key_id = os.getenv("KALSHI_KEY_ID")
 config.private_key_pem = clean_key
 kalshi = KalshiClient(config)
 
-price_history = deque(maxlen=150)
+price_history = deque(maxlen=100)
+last_btc_price = None
 
 async def get_btc_price_async():
     try:
@@ -29,57 +30,51 @@ async def get_btc_price_async():
     except:
         return None
 
-def get_timeframe_bias(current_price, minutes_ago):
-    if not price_history:
-        return "Neutral", "➖"
-    cutoff = datetime.now() - timedelta(minutes=minutes_ago)
-    past_prices = [p for ts, p in price_history if ts <= cutoff]
-    if not past_prices:
-        return "Neutral", "➖"
-    past_price = past_prices[-1]
-    change = ((current_price - past_price) / past_price) * 100
-
-    if change >= 0.25:
-        return "Arriba", "📈"
-    elif change <= -0.25:
-        return "Bajo", "📉"
-    else:
-        return "Neutral", "➖"
-
 async def send_update(context: ContextTypes.DEFAULT_TYPE):
+    global last_btc_price
     try:
-        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
+        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=6)
         btc_price = await get_btc_price_async()
 
         if btc_price:
             price_history.append((datetime.now(), btc_price))
 
-        bias_1m, emoji_1m   = get_timeframe_bias(btc_price, 1) if btc_price else ("Neutral", "➖")
-        bias_5m, emoji_5m   = get_timeframe_bias(btc_price, 5) if btc_price else ("Neutral", "➖")
-        bias_10m, emoji_10m = get_timeframe_bias(btc_price, 10) if btc_price else ("Neutral", "➖")
-        bias_15m, emoji_15m = get_timeframe_bias(btc_price, 15) if btc_price else ("Neutral", "➖")
+        # Get first market for target price
+        first_market = markets.markets[0] if markets.markets else None
+        target_price = "N/A"
+        if first_market and hasattr(first_market, 'title'):
+            target_price = first_market.title
 
-        bullish_count = sum(b == "Arriba" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
-        bearish_count = sum(b == "Bajo" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+        # === Improved Buy/Sell Score ===
+        buy_score = 5
+        sell_score = 5
 
-        buy_score = min(10, 4 + bullish_count * 1.5)
-        sell_score = min(10, 4 + bearish_count * 1.5)
+        if first_market:
+            mid = (float(first_market.yes_bid_dollars or 0) + float(first_market.yes_ask_dollars or 0)) / 2
+            
+            # Base score from Kalshi market
+            if mid > 0.6:
+                buy_score = 7
+            elif mid > 0.55:
+                buy_score = 6
+            elif mid < 0.4:
+                sell_score = 7
+            elif mid < 0.45:
+                sell_score = 6
 
-        strong_label = ""
-        if buy_score >= 8:
-            strong_label = " 🔥 Fuerte"
-        elif sell_score >= 8:
-            strong_label = " 🔥 Fuerte"
+        # Add momentum from recent BTC price
+        if btc_price and last_btc_price:
+            change = ((btc_price - last_btc_price) / last_btc_price) * 100
+            if change > 0.3:
+                buy_score = min(10, buy_score + 2)
+            elif change < -0.3:
+                sell_score = min(10, sell_score + 2)
 
         msg = "✅ *Kalshi BTC 15m*\n\n"
         if btc_price:
-            msg += f"₿ BTC: `${btc_price:,.2f}`\n"
-        msg += f"1m: {emoji_1m} *{bias_1m}*\n"
-        msg += f"5m: {emoji_5m} *{bias_5m}*\n"
-        msg += f"10m: {emoji_10m} *{bias_10m}*\n"
-        msg += f"15m: {emoji_15m} *{bias_15m}*{strong_label}\n\n"
-        msg += f"Puntuación de Compra: `{int(buy_score)}/10`\n"
-        msg += f"Puntuación de Venta: `{int(sell_score)}/10`\n\n"
+            msg += f"₿ BTC Actual: `${btc_price:,.2f}`\n"
+        msg += f"🎯 Precio Objetivo: {target_price}\n\n"
+        msg += f"Compra: `{buy_score}/10` | Venta: `{sell_score}/10`\n\n"
         msg += "*Mercados BTC 15min:*\n"
 
         for m in markets.markets:
@@ -92,6 +87,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             msg += f"• Arriba · {up}% | Bajo · {down}%{lock}\n"
 
         await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
+        last_btc_price = btc_price
 
     except Exception as e:
         print(f"Error: {e}")
