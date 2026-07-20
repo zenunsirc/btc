@@ -11,9 +11,12 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram(text: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"Telegram send error: {e}")
 
 send_telegram("✅ Bot started successfully (Production)")
 
@@ -40,8 +43,11 @@ while True:
             msg += f"• `{m.ticker}`\n  Bid: `${yes_bid:.2f}` | Ask: `${yes_ask:.2f}`\n"
 
         send_telegram(msg)
+        print("Data message sent successfully")
 
     except Exception as e:
-        send_telegram(f"⚠️ Error: {str(e)}")
+        error_msg = f"⚠️ Error: {type(e).__name__} - {str(e)}"
+        print(error_msg)
+        send_telegram(error_msg)
 
     time.sleep(60)
