@@ -11,9 +11,6 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Protección: Solo responde en este chat/grupo
-ALLOWED_CHAT_ID = 8686892442
-
 raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
 clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
 
@@ -42,18 +39,15 @@ def get_timeframe_bias(current_price, minutes_ago):
     past_price = past_prices[-1]
     change = ((current_price - past_price) / past_price) * 100
 
-    if change >= 0.5:
+    # Lowered threshold for better sensitivity
+    if change >= 0.25:
         return "Alcista", "📈"
-    elif change <= -0.5:
+    elif change <= -0.25:
         return "Bajista", "📉"
     else:
         return "Neutral", "➖"
 
 async def send_update(context: ContextTypes.DEFAULT_TYPE):
-    # Protección contra uso no autorizado
-    if int(TELEGRAM_CHAT_ID) != ALLOWED_CHAT_ID:
-        return
-
     try:
         markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
         btc_price = await get_btc_price_async()
@@ -72,7 +66,6 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         buy_score = min(10, 4 + bullish_count * 1.5)
         sell_score = min(10, 4 + bearish_count * 1.5)
 
-        # Etiqueta "Fuerte"
         strong_label = ""
         if buy_score >= 8:
             strong_label = " 🔥 Fuerte"
@@ -102,12 +95,12 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
 
     except Exception as e:
-        print(f"Error de actualización: {e}")
+        print(f"Error: {e}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.job_queue.run_repeating(send_update, interval=20, first=5)
-    print("Bot iniciado correctamente (actualizaciones cada 20s)")
+    print("Bot iniciado con indicadores mejorados")
     app.run_polling()
 
 if __name__ == "__main__":
