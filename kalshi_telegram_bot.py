@@ -11,6 +11,9 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# Protección: Solo responde en este chat/grupo
+ALLOWED_CHAT_ID = 8686892442
+
 raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
 clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
 
@@ -31,22 +34,26 @@ async def get_btc_price_async():
 
 def get_timeframe_bias(current_price, minutes_ago):
     if not price_history:
-        return "Neutral"
+        return "Neutral", "➖"
     cutoff = datetime.now() - timedelta(minutes=minutes_ago)
     past_prices = [p for ts, p in price_history if ts <= cutoff]
     if not past_prices:
-        return "Neutral"
+        return "Neutral", "➖"
     past_price = past_prices[-1]
     change = ((current_price - past_price) / past_price) * 100
 
-    if change >= 0.4:
-        return "Bullish"
-    elif change <= -0.4:
-        return "Bearish"
+    if change >= 0.5:
+        return "Alcista", "📈"
+    elif change <= -0.5:
+        return "Bajista", "📉"
     else:
-        return "Neutral"
+        return "Neutral", "➖"
 
 async def send_update(context: ContextTypes.DEFAULT_TYPE):
+    # Protección contra uso no autorizado
+    if int(TELEGRAM_CHAT_ID) != ALLOWED_CHAT_ID:
+        return
+
     try:
         markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
         btc_price = await get_btc_price_async()
@@ -54,24 +61,34 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         if btc_price:
             price_history.append((datetime.now(), btc_price))
 
-        bias_1m  = get_timeframe_bias(btc_price, 1) if btc_price else "Neutral"
-        bias_5m  = get_timeframe_bias(btc_price, 5) if btc_price else "Neutral"
-        bias_10m = get_timeframe_bias(btc_price, 10) if btc_price else "Neutral"
-        bias_15m = get_timeframe_bias(btc_price, 15) if btc_price else "Neutral"
+        bias_1m, emoji_1m   = get_timeframe_bias(btc_price, 1) if btc_price else ("Neutral", "➖")
+        bias_5m, emoji_5m   = get_timeframe_bias(btc_price, 5) if btc_price else ("Neutral", "➖")
+        bias_10m, emoji_10m = get_timeframe_bias(btc_price, 10) if btc_price else ("Neutral", "➖")
+        bias_15m, emoji_15m = get_timeframe_bias(btc_price, 15) if btc_price else ("Neutral", "➖")
 
-        bullish_count = sum(b == "Bullish" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
-        bearish_count = sum(b == "Bearish" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+        bullish_count = sum(b == "Alcista" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
+        bearish_count = sum(b == "Bajista" for b in [bias_1m, bias_5m, bias_10m, bias_15m])
 
         buy_score = min(10, 4 + bullish_count * 1.5)
         sell_score = min(10, 4 + bearish_count * 1.5)
 
+        # Etiqueta "Fuerte"
+        strong_label = ""
+        if buy_score >= 8:
+            strong_label = " 🔥 Fuerte"
+        elif sell_score >= 8:
+            strong_label = " 🔥 Fuerte"
+
         msg = "✅ *Kalshi BTC 15m*\n\n"
         if btc_price:
             msg += f"₿ BTC: `${btc_price:,.2f}`\n"
-        msg += f"1m: *{bias_1m}*   5m: *{bias_5m}*\n"
-        msg += f"10m: *{bias_10m}*  15m: *{bias_15m}*\n\n"
-        msg += f"Buy Score: `{int(buy_score)}/10` | Sell Score: `{int(sell_score)}/10`\n\n"
-        msg += "*BTC 15min Markets:*\n"
+        msg += f"1m: {emoji_1m} *{bias_1m}*\n"
+        msg += f"5m: {emoji_5m} *{bias_5m}*\n"
+        msg += f"10m: {emoji_10m} *{bias_10m}*\n"
+        msg += f"15m: {emoji_15m} *{bias_15m}*{strong_label}\n\n"
+        msg += f"Puntuación de Compra: `{int(buy_score)}/10`\n"
+        msg += f"Puntuación de Venta: `{int(sell_score)}/10`\n\n"
+        msg += "*Mercados BTC 15min:*\n"
 
         for m in markets.markets:
             yes_bid = float(m.yes_bid_dollars or 0)
@@ -80,17 +97,17 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             up = round(mid * 100)
             down = 100 - up
             lock = " 🔒💵" if up >= 75 or down >= 75 else ""
-            msg += f"• Up · {up}% | Down · {down}%{lock}\n"
+            msg += f"• Alcista · {up}% | Bajista · {down}%{lock}\n"
 
         await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
 
     except Exception as e:
-        print(f"Update error: {e}")
+        print(f"Error de actualización: {e}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.job_queue.run_repeating(send_update, interval=20, first=5)
-    print("Bot started (20s updates)!")
+    print("Bot iniciado correctamente (actualizaciones cada 20s)")
     app.run_polling()
 
 if __name__ == "__main__":
