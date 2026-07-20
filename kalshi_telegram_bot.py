@@ -29,7 +29,7 @@ kalshi = KalshiClient(config)
 while True:
     try:
         balance = kalshi.get_balance()
-        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=6)
+        markets = kalshi.get_markets(series_ticker="KXBTC15M", status="open", limit=8)
 
         msg = "✅ *Kalshi BTC 15m Bot* (Production)\n\n"
         msg += f"💰 Balance: `${balance.balance / 100:.2f}`\n\n"
@@ -37,7 +37,7 @@ while True:
         for m in markets.markets:
             yes_bid = (m.yes_bid or 0) / 100
             yes_ask = (m.yes_ask or 0) / 100
-            msg += f"• `{m.ticker}` | Bid `${yes_bid:.2f}` Ask `${yes_ask:.2f}`\n"
+            msg += f"• `{m.ticker}`\n  Bid: `${yes_bid:.2f}` | Ask: `${yes_ask:.2f}`\n"
 
         send_telegram(msg)
 
