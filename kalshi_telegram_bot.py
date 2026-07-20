@@ -1,6 +1,6 @@
 import os
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 from kalshi_python_sync import Configuration, KalshiClient
 from telegram.ext import Application, ContextTypes
@@ -21,7 +21,7 @@ kalshi = KalshiClient(config)
 
 price_history = deque(maxlen=100)
 last_btc_price = None
-last_strong_alert = None  # For cooldown
+last_strong_alert = None
 
 async def get_btc_price_async():
     try:
@@ -42,7 +42,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 
         first = markets.markets[0] if markets.markets else None
 
-        # === Scoring ===
+        # Scoring
         buy_score = 5
         sell_score = 5
 
@@ -53,25 +53,9 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             elif mid < 0.38: sell_score = 8
             elif mid < 0.44: sell_score = 7
 
-        # BTC Momentum
-        momentum = ""
-        if btc_price and last_btc_price:
-            change = ((btc_price - last_btc_price) / last_btc_price) * 100
-            if change > 0.25:
-                momentum = "📈 BTC subiendo"
-                buy_score = min(10, buy_score + 1)
-            elif change < -0.25:
-                momentum = "📉 BTC bajando"
-                sell_score = min(10, sell_score + 1)
-            else:
-                momentum = "➖ BTC estable"
-
-        # Normal update message
-        msg = "✅ *Kalshi BTC 15m*\n\n"
+        msg = "💰 *money printer🤑*\n\n"
         if btc_price:
-            msg += f"₿ BTC: `${btc_price:,.2f}`\n"
-        if momentum:
-            msg += f"{momentum}\n\n"
+            msg += f"₿ BTC: `${btc_price:,.2f}`\n\n"
         msg += f"Compra: `{buy_score}/10` | Venta: `{sell_score}/10`\n\n"
         msg += "*Mercados BTC 15min:*\n"
 
@@ -86,18 +70,19 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
 
-        # === Strong Alert (only if score ≥ 8) ===
+        # Strong Alert
         now = datetime.now()
         if (buy_score >= 8 or sell_score >= 8):
-            if last_strong_alert is None or (now - last_strong_alert).seconds > 180:  # 3 min cooldown
-                alert_msg = "🔥 *SEÑAL FUERTE*\n\n"
+            if last_strong_alert is None or (now - last_strong_alert).seconds > 180:
+                alert = "🔥 *SEÑAL FUERTE DETECTADA*\n\n"
                 if buy_score >= 8:
-                    alert_msg += f"Compra fuerte detectada: `{buy_score}/10`\n"
+                    alert += f"📈 Compra fuerte: `{buy_score}/10`\n"
                 if sell_score >= 8:
-                    alert_msg += f"Venta fuerte detectada: `{sell_score}/10`\n"
-                alert_msg += f"\n₿ BTC: `${btc_price:,.2f}`"
+                    alert += f"📉 Venta fuerte: `{sell_score}/10`\n"
+                if btc_price:
+                    alert += f"\n₿ BTC: `${btc_price:,.2f}`"
 
-                await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=alert_msg, parse_mode="Markdown")
+                await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=alert, parse_mode="Markdown")
                 last_strong_alert = now
 
         last_btc_price = btc_price
@@ -107,8 +92,8 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.job_queue.run_repeating(send_update, interval=20, first=5)
-    print("Bot iniciado con alertas fuertes")
+    app.job_queue.run_repeating(send_update, interval=15, first=5)
+    print("Bot iniciado correctamente")
     app.run_polling()
 
 if __name__ == "__main__":
