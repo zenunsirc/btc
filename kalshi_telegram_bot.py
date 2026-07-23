@@ -53,7 +53,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             elif mid < 0.38: sell_score = 8
             elif mid < 0.44: sell_score = 7
 
-        msg = "💰 *money printer🤑*\n\n"
+        msg = "🎥 *video clip*\n\n"
         if btc_price:
             msg += f"₿ BTC: `${btc_price:,.2f}`\n\n"
         msg += f"Compra: `{buy_score}/10` | Venta: `{sell_score}/10`\n\n"
