@@ -27,7 +27,19 @@ async def get_btc_price_async():
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             r = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
-            return float(r.json()["price"])
+            
+            if r.status_code != 200:
+                print(f"Binance status: {r.status_code}")
+                return None
+                
+            data = r.json()
+            
+            if "price" not in data:
+                print(f"Binance respuesta inesperada: {data}")
+                return None
+                
+            return float(data["price"])
+            
     except Exception as e:
         print(f"Error Binance: {e}")
         return None
@@ -146,7 +158,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.job_queue.run_repeating(send_update, interval=7, first=5)
+    app.job_queue.run_repeating(send_update, interval=12, first=5)
     print("Bot iniciado correctamente")
     app.run_polling(drop_pending_updates=True)
 
