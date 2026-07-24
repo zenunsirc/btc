@@ -132,7 +132,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-        # Señal fuerte con dirección clara
+        # Señal fuerte
         now = datetime.now()
         strong_up = up_score >= 8 and up_score > down_score + 1
         strong_down = down_score >= 8 and down_score > up_score + 1
