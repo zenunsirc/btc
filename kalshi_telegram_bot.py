@@ -43,12 +43,10 @@ def get_momentum():
 
     prices = [p[1] for p in price_history]
 
-    # Momentum corto (más peso)
     short_recent = prices[-3:]
     short_older = prices[-6:-3]
     short_mom = ((sum(short_recent)/3) - (sum(short_older)/3)) / (sum(short_older)/3) * 100
 
-    # Momentum medio
     med_recent = prices[-5:]
     med_older = prices[-10:-5]
     med_mom = ((sum(med_recent)/5) - (sum(med_older)/5)) / (sum(med_older)/5) * 100
@@ -77,11 +75,9 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         if first:
             mid = (float(first.yes_bid_dollars or 0) + float(first.yes_ask_dollars or 0)) / 2
 
-        # Scoring balanceado
         up_score = 5
         down_score = 5
 
-        # Momentum
         if momentum > 0.15:
             up_score += 3
         elif momentum > 0.08:
@@ -95,7 +91,6 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         elif momentum < -0.035:
             down_score += 1
 
-        # Influencia de las odds del mercado
         if mid > 0.59:
             up_score += 2
         elif mid > 0.54:
@@ -108,7 +103,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         up_score = min(up_score, 10)
         down_score = min(down_score, 10)
 
-        # Mensaje normal
+        # Mensaje
         msg = ""
         if btc_price:
             msg += f"₿ BTC: `${btc_price:,.2f}`\n"
@@ -129,20 +124,12 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         else:
             msg += "No hay mercados abiertos\n"
 
-        await context.bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=msg,
-            parse_mode="Markdown"
-        )
-
-        # === SEÑAL FUERTE (más visible y selectiva) ===
-        now = datetime.now()
-
+        # Strong signal style inside the hourly message
         strong_up = (
             up_score >= 8 and
             up_score >= down_score + 2 and
             momentum > 0.07 and
-            mid < 0.70          # evita cuando el edge ya es bajo
+            mid < 0.70
         )
 
         strong_down = (
@@ -152,37 +139,25 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             mid > 0.30
         )
 
-        if (strong_up or strong_down) and (last_strong_alert is None or (now - last_strong_alert).seconds > 160):
-            if strong_up:
-                alert = (
-                    f"🟢🟢 *BUY / ARRIBA* 🟢🟢\n\n"
-                    f"Puntuación: `{up_score}/10`\n"
-                    f"Momentum: `{momentum:+.2f}%`"
-                )
-            else:
-                alert = (
-                    f"🔴🔴 *SELL / ABAJO* 🔴🔴\n\n"
-                    f"Puntuación: `{down_score}/10`\n"
-                    f"Momentum: `{momentum:+.2f}%`"
-                )
+        if strong_up:
+            msg = f"🟢🟢 *BUY / ARRIBA* 🟢🟢\n\n" + msg
+        elif strong_down:
+            msg = f"🔴🔴 *SELL / ABAJO* 🔴🔴\n\n" + msg
 
-            if btc_price:
-                alert += f"\n₿ `${btc_price:,.2f}`"
-
-            await context.bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
-                text=alert,
-                parse_mode="Markdown"
-            )
-            last_strong_alert = now
+        await context.bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=msg,
+            parse_mode="Markdown"
+        )
 
     except Exception as e:
         print(f"Error en send_update: {e}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.job_queue.run_repeating(send_update, interval=12, first=5)
-    print("Bot iniciado correctamente")
+    # 3600 seconds = 1 hour
+    app.job_queue.run_repeating(send_update, interval=3600, first=10)
+    print("Bot iniciado - 1 mensaje por hora")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
