@@ -42,19 +42,18 @@ def get_momentum():
         return 0
 
     prices = [p[1] for p in price_history]
-    
-    # Short momentum (last ~40-50 seconds)
+
+    # Momentum corto (más peso)
     short_recent = prices[-3:]
     short_older = prices[-6:-3]
     short_mom = ((sum(short_recent)/3) - (sum(short_older)/3)) / (sum(short_older)/3) * 100
 
-    # Medium momentum (last ~1.5-2 min)
+    # Momentum medio
     med_recent = prices[-5:]
     med_older = prices[-10:-5]
     med_mom = ((sum(med_recent)/5) - (sum(med_older)/5)) / (sum(med_older)/5) * 100
 
-    # Combined
-    return (short_mom * 0.6) + (med_mom * 0.4)
+    return (short_mom * 0.7) + (med_mom * 0.3)
 
 async def send_update(context: ContextTypes.DEFAULT_TYPE):
     global last_strong_alert
@@ -78,35 +77,38 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         if first:
             mid = (float(first.yes_bid_dollars or 0) + float(first.yes_ask_dollars or 0)) / 2
 
-        # === Much stricter scoring ===
+        # Scoring balanceado
         up_score = 5
         down_score = 5
 
-        # Momentum (more weight)
-        if momentum > 0.18:
+        # Momentum
+        if momentum > 0.15:
             up_score += 3
-        elif momentum > 0.09:
+        elif momentum > 0.08:
             up_score += 2
-        elif momentum > 0.04:
+        elif momentum > 0.035:
             up_score += 1
-        elif momentum < -0.18:
+        elif momentum < -0.15:
             down_score += 3
-        elif momentum < -0.09:
+        elif momentum < -0.08:
             down_score += 2
-        elif momentum < -0.04:
+        elif momentum < -0.035:
             down_score += 1
 
-        # Market odds (only help if not extreme)
-        if 0.52 < mid < 0.68:
-            if mid > 0.58:
-                up_score += 1
-            elif mid < 0.42:
-                down_score += 1
+        # Influencia de las odds del mercado
+        if mid > 0.59:
+            up_score += 2
+        elif mid > 0.54:
+            up_score += 1
+        elif mid < 0.41:
+            down_score += 2
+        elif mid < 0.46:
+            down_score += 1
 
         up_score = min(up_score, 10)
         down_score = min(down_score, 10)
 
-        # Normal message
+        # Mensaje normal
         msg = ""
         if btc_price:
             msg += f"₿ BTC: `${btc_price:,.2f}`\n"
@@ -133,29 +135,36 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-        # === Strong signal (much harder to trigger) ===
+        # === SEÑAL FUERTE (más visible y selectiva) ===
         now = datetime.now()
-        
-        # Only fire if score is high AND momentum is meaningful AND odds aren't already extreme
+
         strong_up = (
-            up_score >= 8 and 
-            up_score >= down_score + 2 and 
-            momentum > 0.08 and
-            mid < 0.70
+            up_score >= 8 and
+            up_score >= down_score + 2 and
+            momentum > 0.07 and
+            mid < 0.70          # evita cuando el edge ya es bajo
         )
-        
+
         strong_down = (
-            down_score >= 8 and 
-            down_score >= up_score + 2 and 
-            momentum < -0.08 and
+            down_score >= 8 and
+            down_score >= up_score + 2 and
+            momentum < -0.07 and
             mid > 0.30
         )
 
-        if (strong_up or strong_down) and (last_strong_alert is None or (now - last_strong_alert).seconds > 180):
+        if (strong_up or strong_down) and (last_strong_alert is None or (now - last_strong_alert).seconds > 160):
             if strong_up:
-                alert = f"🔥 *SEÑAL FUERTE: ARRIBA*\n\nPuntuación: `{up_score}/10`\nMomentum: `{momentum:+.2f}%`"
+                alert = (
+                    f"🟢🟢 *BUY / ARRIBA* 🟢🟢\n\n"
+                    f"Puntuación: `{up_score}/10`\n"
+                    f"Momentum: `{momentum:+.2f}%`"
+                )
             else:
-                alert = f"🔥 *SEÑAL FUERTE: ABAJO*\n\nPuntuación: `{down_score}/10`\nMomentum: `{momentum:+.2f}%`"
+                alert = (
+                    f"🔴🔴 *SELL / ABAJO* 🔴🔴\n\n"
+                    f"Puntuación: `{down_score}/10`\n"
+                    f"Momentum: `{momentum:+.2f}%`"
+                )
 
             if btc_price:
                 alert += f"\n₿ `${btc_price:,.2f}`"
