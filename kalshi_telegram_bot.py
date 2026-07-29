@@ -25,7 +25,7 @@ last_strong_alert = None
 
 async def get_btc_price_async():
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=7.0) as client:
             r = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
             if r.status_code != 200:
                 return None
@@ -75,6 +75,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         if first:
             mid = (float(first.yes_bid_dollars or 0) + float(first.yes_ask_dollars or 0)) / 2
 
+        # Scoring
         up_score = 5
         down_score = 5
 
@@ -103,7 +104,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         up_score = min(up_score, 10)
         down_score = min(down_score, 10)
 
-        # Mensaje
+        # Mensaje normal
         msg = ""
         if btc_price:
             msg += f"₿ BTC: `${btc_price:,.2f}`\n"
@@ -124,7 +125,15 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         else:
             msg += "No hay mercados abiertos\n"
 
-        # Strong signal style inside the hourly message
+        await context.bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=msg,
+            parse_mode="Markdown"
+        )
+
+        # Señal fuerte grande y clara
+        now = datetime.now()
+
         strong_up = (
             up_score >= 8 and
             up_score >= down_score + 2 and
@@ -139,25 +148,37 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             mid > 0.30
         )
 
-        if strong_up:
-            msg = f"🟢🟢 *BUY / ARRIBA* 🟢🟢\n\n" + msg
-        elif strong_down:
-            msg = f"🔴🔴 *SELL / ABAJO* 🔴🔴\n\n" + msg
+        if (strong_up or strong_down) and (last_strong_alert is None or (now - last_strong_alert).seconds > 150):
+            if strong_up:
+                alert = (
+                    f"🟢🟢 *BUY / ARRIBA* 🟢🟢\n\n"
+                    f"Puntuación: `{up_score}/10`\n"
+                    f"Momentum: `{momentum:+.2f}%`"
+                )
+            else:
+                alert = (
+                    f"🔴🔴 *SELL / ABAJO* 🔴🔴\n\n"
+                    f"Puntuación: `{down_score}/10`\n"
+                    f"Momentum: `{momentum:+.2f}%`"
+                )
 
-        await context.bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=msg,
-            parse_mode="Markdown"
-        )
+            if btc_price:
+                alert += f"\n₿ `${btc_price:,.2f}`"
+
+            await context.bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=alert,
+                parse_mode="Markdown"
+            )
+            last_strong_alert = now
 
     except Exception as e:
         print(f"Error en send_update: {e}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    # 3600 seconds = 1 hour
-    app.job_queue.run_repeating(send_update, interval=3600, first=10)
-    print("Bot iniciado - 1 mensaje por hora")
+    app.job_queue.run_repeating(send_update, interval=10, first=5)
+    print("Bot iniciado - cada 10 segundos")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
