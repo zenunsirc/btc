@@ -40,22 +40,20 @@ async def get_btc_price_async():
         return None
 
 def get_momentum_and_vol():
-    if len(price_history) < 15:
+    if len(price_history) < 5:
         return 0.0, 0.0
 
     prices = [p[1] for p in price_history]
-    
-    # Momentum
-    short = ((prices[-1] - prices[-4]) / prices[-4]) * 100
-    medium = ((prices[-1] - prices[-8]) / prices[-8]) * 100
-    momentum = (short * 0.6) + (medium * 0.4)
 
-    # Simple volatility (std of recent returns)
+    short = ((prices[-1] - prices[-2]) / prices[-2]) * 100 if len(prices) >= 2 else 0
+    medium = ((prices[-1] - prices[-4]) / prices[-4]) * 100 if len(prices) >= 4 else 0
+    momentum = (short * 0.65) + (medium * 0.35)
+
     returns = []
-    for i in range(1, 12):
+    for i in range(1, min(7, len(prices))):
         ret = ((prices[-i] - prices[-i-1]) / prices[-i-1]) * 100
         returns.append(ret)
-    
+
     vol = statistics.stdev(returns) if len(returns) > 2 else 0.0
     return momentum, vol
 
@@ -81,12 +79,9 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         if first:
             mid = (float(first.yes_bid_dollars or 0) + float(first.yes_ask_dollars or 0)) / 2
 
-        # === Improved Model Probability ===
-        # High volatility reduces the strength of the signal
-        vol_penalty = min(vol * 0.35, 0.25)
-        raw_move = momentum * 1.6
-        model_up = 0.50 + raw_move - (vol_penalty if momentum > 0 else -vol_penalty)
-        model_up = max(0.20, min(0.80, model_up))
+        # === Model Probability (improved) ===
+        model_up = 0.50 + (momentum * 3.2)
+        model_up = max(0.12, min(0.88, model_up))
         model_down = 1.0 - model_up
 
         edge_up = model_up - mid
@@ -96,28 +91,23 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
         up_score = 5
         down_score = 5
 
-        if momentum > 0.22:
+        if momentum > 0.15:
             up_score += 3
-        elif momentum > 0.11:
+        elif momentum > 0.07:
             up_score += 2
-        elif momentum > 0.05:
+        elif momentum > 0.03:
             up_score += 1
-        elif momentum < -0.22:
+        elif momentum < -0.15:
             down_score += 3
-        elif momentum < -0.11:
+        elif momentum < -0.07:
             down_score += 2
-        elif momentum < -0.05:
+        elif momentum < -0.03:
             down_score += 1
 
-        if mid > 0.57:
+        if mid > 0.58:
             up_score += 1
-        elif mid < 0.43:
+        elif mid < 0.42:
             down_score += 1
-
-        # Volatility dampener
-        if vol > 0.35:
-            up_score = max(5, up_score - 1)
-            down_score = max(5, down_score - 1)
 
         up_score = min(up_score, 10)
         down_score = min(down_score, 10)
@@ -154,21 +144,19 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 
         # === STRONG SIGNAL ===
         strong_up = (
-            up_score >= 8 and 
-            up_score >= down_score + 2 and 
-            momentum > 0.10 and 
-            vol < 0.45 and
+            up_score >= 8 and
+            up_score >= down_score + 2 and
+            momentum > 0.08 and
             mid < 0.64
         )
         strong_down = (
-            down_score >= 8 and 
-            down_score >= up_score + 2 and 
-            momentum < -0.10 and 
-            vol < 0.45 and
+            down_score >= 8 and
+            down_score >= up_score + 2 and
+            momentum < -0.08 and
             mid > 0.36
         )
 
-        if (strong_up or strong_down) and (last_strong_alert is None or (now - last_strong_alert).seconds > 160):
+        if (strong_up or strong_down) and (last_strong_alert is None or (now - last_strong_alert).seconds > 140):
             if strong_up:
                 alert = (
                     f"🟢🟢 *BUY / ARRIBA* 🟢🟢\n\n"
@@ -190,28 +178,28 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=alert, parse_mode="Markdown")
             last_strong_alert = now
 
-        # === LOTTO (mispricing only) ===
-        if last_lotto_alert is None or (now - last_lotto_alert).seconds > 110:
-            if edge_up >= 0.11 and model_up >= 0.61 and mid < 0.60 and vol < 0.40:
+        # === LOTTO ===
+        if last_lotto_alert is None or (now - last_lotto_alert).seconds > 90:
+            if edge_up >= 0.11 and model_up >= 0.60 and mid < 0.61:
                 lotto = (
                     f"🎰 *LOTTO ARRIBA*\n\n"
                     f"Model: `{model_up*100:.0f}%`\n"
                     f"Kalshi: `{mid*100:.0f}%`\n"
                     f"Edge: `+{edge_up*100:.1f}%`\n"
-                    f"Vol: `{vol:.2f}`"
+                    f"Momentum: `{momentum:+.2f}%`"
                 )
                 if btc_price:
                     lotto += f"\n₿ `${btc_price:,.2f}`"
                 await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=lotto, parse_mode="Markdown")
                 last_lotto_alert = now
 
-            elif edge_down >= 0.11 and model_down >= 0.61 and mid > 0.40 and vol < 0.40:
+            elif edge_down >= 0.11 and model_down >= 0.60 and mid > 0.39:
                 lotto = (
                     f"🎰 *LOTTO ABAJO*\n\n"
                     f"Model: `{model_down*100:.0f}%`\n"
                     f"Kalshi: `{(1-mid)*100:.0f}%`\n"
                     f"Edge: `+{edge_down*100:.1f}%`\n"
-                    f"Vol: `{vol:.2f}`"
+                    f"Momentum: `{momentum:+.2f}%`"
                 )
                 if btc_price:
                     lotto += f"\n₿ `${btc_price:,.2f}`"
@@ -224,7 +212,7 @@ async def send_update(context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.job_queue.run_repeating(send_update, interval=10, first=5)
-    print("Bot upgraded - volatility + cleaner edge")
+    print("Bot improved")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
