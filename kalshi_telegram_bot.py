@@ -1,353 +1,220 @@
+
 import os
-import time
-import requests
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime
+from dotenv import load_dotenv
+from kalshi_python_sync import Configuration, KalshiClient
+from telegram.ext import Application, ContextTypes
+import httpx
+import asyncio
+import statistics
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-CHAT_ID = os.environ["CHAT_ID"]
+load_dotenv()
 
-POLL_SEC = 7
-MIN_SCORE = 8
-MIN_SEP = 3
-NO_TRADE_FIRST_SEC = 300
-NO_TRADE_LAST_SEC = 100
-MIN_DEV = 0.04
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-last_alert_ticker = None
-last_alert_side = None
-last_window = None
+raw_key = os.getenv("KALSHI_PRIVATE_KEY_PEM", "")
+clean_key = raw_key.replace('\r\n', '\n').replace('\r', '\n').strip()
 
+config = Configuration(host="https://external-api.kalshi.com/trade-api/v2")
+config.api_key_id = os.getenv("KALSHI_KEY_ID")
+config.private_key_pem = clean_key
+kalshi = KalshiClient(config)
 
-def tg(text: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(
-        url,
-        json={
-            "chat_id": CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        },
-        timeout=15,
-    )
+price_history = deque(maxlen=60)
+last_strong_alert = None
+last_lotto_alert = None
 
-
-def get_btc():
-    r = requests.get(
-        "https://data-api.binance.vision/api/v3/klines",
-        params={"symbol": "BTCUSDT", "interval": "1m", "limit": 90},
-        timeout=10,
-    )
-    r.raise_for_status()
-    rows = r.json()
-    closes = [float(x[4]) for x in rows]
-    return closes[-1], closes
-
-
-def get_kalshi():
-    r = requests.get(
-        "https://api.elections.kalshi.com/trade-api/v2/markets",
-        params={"series_ticker": "KXBTC15M", "status": "open", "limit": 12},
-        timeout=10,
-    )
-    r.raise_for_status()
-    markets = r.json().get("markets", [])
-
-    def close_ts(m):
-        t = m.get("close_time") or m.get("expected_expiration_time") or ""
-        try:
-            return datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
-        except Exception:
-            return 1e18
-
-    markets = sorted(markets, key=close_ts)
-    for m in markets:
-        if m.get("floor_strike") or m.get("cap_strike"):
-            return m
-    return markets[0] if markets else None
-
-
-def rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return 50.0
-    gains, losses = [], []
-    for i in range(-period, 0):
-        d = closes[i] - closes[i - 1]
-        gains.append(max(d, 0.0))
-        losses.append(max(-d, 0.0))
-    ag = sum(gains) / period
-    al = sum(losses) / period
-    if al == 0:
-        return 100.0
-    return 100 - (100 / (1 + ag / al))
-
-
-def momentum(closes):
-    if len(closes) < 25:
-        return 0.0, 0.0, 0.0
-    last = closes[-1]
-    s = (last - closes[-4]) / closes[-4] * 100
-    t = (last - closes[-11]) / closes[-11] * 100
-    slow = (last - closes[-21]) / closes[-21] * 100
-    return s, t, slow
-
-
-def soft(x):
-    return x / (1 + abs(x))
-
-
-def model_up(spot, target, closes, sec, mid):
-    s, t, slow = momentum(closes)
-    blended = s * 0.5 + t * 0.35 + slow * 0.15
-    r = rsi(closes)
-    mins = max(0.5, (sec or 450) / 60.0)
-
-    rets = []
-    for i in range(-20, 0):
-        if closes[i - 1] > 0:
-            rets.append((closes[i] - closes[i - 1]) / closes[i - 1] * 100)
-    vol = (sum(x * x for x in rets) / max(len(rets), 1)) ** 0.5 if rets else 0.04
-    expected = max(0.025, vol * (mins ** 0.5) * 1.25)
-
-    z = 0.0
-    if target and target > 0:
-        z = ((spot - target) / target * 100) / expected
-
-    p = 0.5 + 0.28 * soft(z * 1.1)
-    p += 0.10 * soft(blended * 14)
-    p += 0.04 * soft((r - 50) / 18)
-
-    if sec is not None and sec < 150 and target:
-        urg = (1 - sec / 150) ** 1.3
-        p += (1 if spot >= target else -1) * urg * 0.22
-
-    if 0.15 < mid < 0.85:
-        conv = min(1.0, abs(z) * 0.65) * 0.65 + min(1.0, abs(blended) * 9) * 0.35
-        w = (1 - conv) * 0.28
-        p = p * (1 - w) + mid * w
-
-    late = sec is not None and sec < 90
-    return max(0.15 if late else 0.28, min(0.85 if late else 0.72, p))
-
-
-def scores(spot, target, closes, mid, model, sec):
-    s, t, slow = momentum(closes)
-    r = rsi(closes)
-    buy = 0
-    sell = 0
-
-    if s > 0.14:
-        buy += 3
-    elif s > 0.07:
-        buy += 2
-    elif s > 0.03:
-        buy += 1
-    if s < -0.14:
-        sell += 3
-    elif s < -0.07:
-        sell += 2
-    elif s < -0.03:
-        sell += 1
-
-    if t > 0.10 or (t > 0.05 and slow > 0):
-        buy += 2
-    elif t > 0.04:
-        buy += 1
-    if t < -0.10 or (t < -0.05 and slow < 0):
-        sell += 2
-    elif t < -0.04:
-        sell += 1
-
-    if r > 63:
-        buy += 2
-    elif r > 55:
-        buy += 1
-    if r < 37:
-        sell += 2
-    elif r < 45:
-        sell += 1
-
-    if target and target > 0:
-        dev = (spot - target) / target * 100
-        if dev > 0.10:
-            buy += 2
-        elif dev > 0.04:
-            buy += 1
-        if dev < -0.10:
-            sell += 2
-        elif dev < -0.04:
-            sell += 1
-
-    if 0.15 < mid < 0.85:
-        if mid > 0.62:
-            buy += 2
-        elif mid > 0.55:
-            buy += 1
-        if mid < 0.38:
-            sell += 2
-        elif mid < 0.45:
-            sell += 1
-
-    edge_up = model - mid
-    edge_dn = mid - model
-    if edge_up > 0.12:
-        buy += 2
-    elif edge_up > 0.06:
-        buy += 1
-    if edge_dn > 0.12:
-        sell += 2
-    elif edge_dn > 0.06:
-        sell += 1
-
-    if sec is not None and sec < 100 and target:
-        if spot > target * 1.0004:
-            buy += 1
-        if spot < target * 0.9996:
-            sell += 1
-
-    return min(10, buy), min(10, sell)
-
-
-def mid_from_market(m):
-    bid = float(m.get("yes_bid_dollars") or m.get("yes_bid") or 0)
-    ask = float(m.get("yes_ask_dollars") or m.get("yes_ask") or 0)
-    last = float(m.get("last_price_dollars") or m.get("last_price") or 0)
-    if bid > 1.5:
-        bid /= 100
-    if ask > 1.5:
-        ask /= 100
-    if last > 1.5:
-        last /= 100
-    if bid + ask < 0.03:
-        return last if 0.08 < last < 0.92 else 0.5
-    if bid > 0 and ask > 0:
-        return max(0.03, min(0.97, (bid + ask) / 2))
-    return max(0.03, min(0.97, last or 0.5))
-
-
-def seconds_left(m):
-    t = m.get("close_time") or m.get("expected_expiration_time")
-    if not t:
-        return None
+async def get_btc_price_async():
     try:
-        close = datetime.fromisoformat(t.replace("Z", "+00:00"))
-        return max(0, int((close - datetime.now(timezone.utc)).total_seconds()))
-    except Exception:
+        async with httpx.AsyncClient(timeout=7.0) as client:
+            r = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            if "price" not in data:
+                return None
+            return float(data["price"])
+    except Exception as e:
+        print(f"Error Binance: {e}")
         return None
 
+def get_momentum_and_vol():
+    if len(price_history) < 5:
+        return 0.0, 0.0
 
-def decide(spot, target, closes, mid, sec):
-    model = model_up(spot, target, closes, sec, mid)
-    buy, sell = scores(spot, target, closes, mid, model, sec)
+    prices = [p[1] for p in price_history]
 
-    if sec is not None and sec > 900 - NO_TRADE_FIRST_SEC:
-        return None, buy, sell, model, "EARLY"
+    short = ((prices[-1] - prices[-2]) / prices[-2]) * 100 if len(prices) >= 2 else 0
+    medium = ((prices[-1] - prices[-4]) / prices[-4]) * 100 if len(prices) >= 4 else 0
+    momentum = (short * 0.65) + (medium * 0.35)
 
-    if target and target > 0:
-        dev = abs((spot - target) / target * 100)
-    else:
-        dev = 0.0
+    returns = []
+    for i in range(1, min(7, len(prices))):
+        ret = ((prices[-i] - prices[-i-1]) / prices[-i-1]) * 100
+        returns.append(ret)
 
-    if sec is not None and sec < NO_TRADE_LAST_SEC:
-        final_up = (
-            target
-            and spot > target * 1.0004
-            and buy >= 8
-            and buy >= sell + MIN_SEP
-            and model >= 0.58
+    vol = statistics.stdev(returns) if len(returns) > 2 else 0.0
+    return momentum, vol
+
+async def send_update(context: ContextTypes.DEFAULT_TYPE):
+    global last_strong_alert, last_lotto_alert
+
+    try:
+        markets = await asyncio.to_thread(
+            kalshi.get_markets,
+            series_ticker="KXBTC15M",
+            status="open",
+            limit=3
         )
-        final_dn = (
-            target
-            and spot < target * 0.9996
-            and sell >= 8
-            and sell >= buy + MIN_SEP
-            and model <= 0.42
+
+        btc_price = await get_btc_price_async()
+        if btc_price:
+            price_history.append((datetime.now(), btc_price))
+
+        momentum, vol = get_momentum_and_vol()
+
+        first = markets.markets[0] if markets and markets.markets else None
+        mid = 0.50
+        if first:
+            mid = (float(first.yes_bid_dollars or 0) + float(first.yes_ask_dollars or 0)) / 2
+
+        # === Model Probability (improved) ===
+        model_up = 0.50 + (momentum * 3.2)
+        model_up = max(0.12, min(0.88, model_up))
+        model_down = 1.0 - model_up
+
+        edge_up = model_up - mid
+        edge_down = model_down - (1.0 - mid)
+
+        # === Scoring ===
+        up_score = 5
+        down_score = 5
+
+        if momentum > 0.15:
+            up_score += 3
+        elif momentum > 0.07:
+            up_score += 2
+        elif momentum > 0.03:
+            up_score += 1
+        elif momentum < -0.15:
+            down_score += 3
+        elif momentum < -0.07:
+            down_score += 2
+        elif momentum < -0.03:
+            down_score += 1
+
+        if mid > 0.58:
+            up_score += 1
+        elif mid < 0.42:
+            down_score += 1
+
+        up_score = min(up_score, 10)
+        down_score = min(down_score, 10)
+
+        # === Normal Message ===
+        msg = ""
+        if btc_price:
+            msg += f"₿ BTC: `${btc_price:,.2f}`\n"
+            msg += f"Momentum: `{momentum:+.2f}%` | Vol: `{vol:.2f}`\n\n"
+
+        msg += f"ARRIBA: `{up_score}/10` | ABAJO: `{down_score}/10`\n"
+        msg += f"Model: `{model_up*100:.0f}%` UP | Kalshi: `{mid*100:.0f}%`\n\n"
+        msg += "*Mercados BTC 15min:*\n"
+
+        if markets and markets.markets:
+            for m in markets.markets:
+                yes_bid = float(m.yes_bid_dollars or 0)
+                yes_ask = float(m.yes_ask_dollars or 0)
+                m_mid = (yes_bid + yes_ask) / 2 if (yes_bid + yes_ask) > 0 else 0
+                up = round(m_mid * 100)
+                down = 100 - up
+                lock = " 🔒" if up >= 72 or down >= 72 else ""
+                msg += f"• ARRIBA {up}% | ABAJO {down}%{lock}\n"
+        else:
+            msg += "No hay mercados abiertos\n"
+
+        await context.bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=msg,
+            parse_mode="Markdown"
         )
-        if final_up:
-            return "LOCK_UP", buy, sell, model, "FINAL LOCK"
-        if final_dn:
-            return "LOCK_DOWN", buy, sell, model, "FINAL LOCK"
-        return None, buy, sell, model, "TOO LATE"
 
-    # hard LOCK only
-    lock_up = (
-        buy >= MIN_SCORE
-        and buy >= sell + MIN_SEP
-        and mid < 0.75
-        and model >= 0.55
-        and dev >= MIN_DEV
-        and (momentum(closes)[0] > 0.02 or (target and spot > target))
-    )
-    lock_dn = (
-        sell >= MIN_SCORE
-        and sell >= buy + MIN_SEP
-        and mid > 0.25
-        and model <= 0.45
-        and dev >= MIN_DEV
-        and (momentum(closes)[0] < -0.02 or (target and spot < target))
-    )
+        now = datetime.now()
 
-    if lock_up:
-        return "LOCK_UP", buy, sell, model, "LOCK"
-    if lock_dn:
-        return "LOCK_DOWN", buy, sell, model, "LOCK"
+        # === STRONG SIGNAL ===
+        strong_up = (
+            up_score >= 8 and
+            up_score >= down_score + 2 and
+            momentum > 0.08 and
+            mid < 0.64
+        )
+        strong_down = (
+            down_score >= 8 and
+            down_score >= up_score + 2 and
+            momentum < -0.08 and
+            mid > 0.36
+        )
 
-    return None, buy, sell, model, "WAIT"
+        if (strong_up or strong_down) and (last_strong_alert is None or (now - last_strong_alert).seconds > 140):
+            if strong_up:
+                alert = (
+                    f"🟢🟢 *BUY / ARRIBA* 🟢🟢\n\n"
+                    f"Score: `{up_score}/10`\n"
+                    f"Momentum: `{momentum:+.2f}%`\n"
+                    f"Model: `{model_up*100:.0f}%`"
+                )
+            else:
+                alert = (
+                    f"🔴🔴 *SELL / ABAJO* 🔴🔴\n\n"
+                    f"Score: `{down_score}/10`\n"
+                    f"Momentum: `{momentum:+.2f}%`\n"
+                    f"Model: `{model_down*100:.0f}%`"
+                )
 
+            if btc_price:
+                alert += f"\n₿ `${btc_price:,.2f}`"
 
-def fmt_msg(side, buy, sell, model, mid, spot, target, sec, tag):
-    arrow = "ARRIBA 🟢" if "UP" in side else "ABAJO 🔴"
-    tl = f"{sec // 60}:{sec % 60:02d}" if sec is not None else "—"
-    tgt = f"${target:,.2f}" if target else "—"
-    return (
-        f"<b>LOCK · {arrow}</b>\n"
-        f"Buy <b>{buy}/10</b> · Sell <b>{sell}/10</b>\n"
-        f"Model {model * 100:.0f}% · Market {mid * 100:.0f}%\n"
-        f"BTC ${spot:,.0f} · Target {tgt}\n"
-        f"Time left {tl}\n"
-        f"<i>{tag} · size small · one shot this window</i>"
-    )
+            await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=alert, parse_mode="Markdown")
+            last_strong_alert = now
 
+        # === LOTTO ===
+        if last_lotto_alert is None or (now - last_lotto_alert).seconds > 90:
+            if edge_up >= 0.11 and model_up >= 0.60 and mid < 0.61:
+                lotto = (
+                    f"🎰 *LOTTO ARRIBA*\n\n"
+                    f"Model: `{model_up*100:.0f}%`\n"
+                    f"Kalshi: `{mid*100:.0f}%`\n"
+                    f"Edge: `+{edge_up*100:.1f}%`\n"
+                    f"Momentum: `{momentum:+.2f}%`"
+                )
+                if btc_price:
+                    lotto += f"\n₿ `${btc_price:,.2f}`"
+                await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=lotto, parse_mode="Markdown")
+                last_lotto_alert = now
 
-def loop():
-    global last_alert_ticker, last_alert_side, last_window
-    print("bot online · lock only · stricter")
-    while True:
-        try:
-            spot, closes = get_btc()
-            m = get_kalshi()
-            if not m:
-                time.sleep(POLL_SEC)
-                continue
+            elif edge_down >= 0.11 and model_down >= 0.60 and mid > 0.39:
+                lotto = (
+                    f"🎰 *LOTTO ABAJO*\n\n"
+                    f"Model: `{model_down*100:.0f}%`\n"
+                    f"Kalshi: `{(1-mid)*100:.0f}%`\n"
+                    f"Edge: `+{edge_down*100:.1f}%`\n"
+                    f"Momentum: `{momentum:+.2f}%`"
+                )
+                if btc_price:
+                    lotto += f"\n₿ `${btc_price:,.2f}`"
+                await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=lotto, parse_mode="Markdown")
+                last_lotto_alert = now
 
-            ticker = m.get("ticker") or ""
-            target = m.get("floor_strike") or m.get("cap_strike")
-            if target is not None:
-                target = float(target)
+    except Exception as e:
+        print(f"Error en send_update: {e}")
 
-            mid = mid_from_market(m)
-            sec = seconds_left(m)
-
-            if ticker and ticker != last_window:
-                last_window = ticker
-                last_alert_ticker = None
-                last_alert_side = None
-
-            side, buy, sell, model, tag = decide(spot, target, closes, mid, sec)
-
-            if side and not (
-                last_alert_ticker == ticker and last_alert_side == side
-            ):
-                tg(fmt_msg(side, buy, sell, model, mid, spot, target, sec, tag))
-                last_alert_ticker = ticker
-                last_alert_side = side
-                print("alert", side, ticker, f"buy={buy} sell={sell}")
-
-        except Exception as e:
-            print("err", e)
-
-        time.sleep(POLL_SEC)
-
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.job_queue.run_repeating(send_update, interval=10, first=5)
+    print("Bot improved")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    loop()
+    main()
